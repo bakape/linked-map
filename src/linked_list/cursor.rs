@@ -1,13 +1,12 @@
-use hashbrown::{
-    hash_map::{Entry, OccupiedEntry},
-    HashMap,
-};
+use hashbrown::hash_map::{Entry, OccupiedEntry};
 
-use super::{node::Node, LinkedList};
+use crate::LinkedMap;
+
+use super::node::Node;
 use paste::paste;
 use std::{
     hash::{BuildHasher, Hash},
-    ptr::NonNull,
+    ptr::{null, null_mut, NonNull},
 };
 
 /// Implement functionality common to both mutable and immutable cursors
@@ -15,54 +14,54 @@ macro_rules! impl_common {
     ($key_value:ty, $iterator:ident) => {
         /// Helper for getting the current node
         #[inline]
-        fn node(&self) -> Option<&mut Node<K, V>> {
-            unsafe { self.node.as_mut() }
+        fn current(&self) -> Option<&mut Node<K, V>> {
+            unsafe { self.current.as_mut() }
         }
 
         /// Navigate to the start of the linked list
         pub fn to_start(&mut self) {
-            self.node = self.list.head;
+            self.current = self.parent.list.head;
         }
 
         /// Navigate to the end of the linked list
         pub fn to_end(&mut self) {
-            self.node = self.list.tail;
+            self.current = self.parent.list.tail;
         }
 
         /// Returns a reference to the current node's key in the map.
         /// Only returns None, if the current linked list is empty.
         pub fn key(&self) -> Option<&K> {
-            self.node().map(|n| &n.key)
+            self.current().map(|n| &n.key)
         }
 
         /// Return a reference to the current node's key-value pair.
         /// Only returns None, if the list is empty.
         pub fn key_value(&self) -> Option<$key_value> {
-            Self::map_ptr(self.node)
+            Self::map_ptr(self.current)
         }
 
-        /// Return the number of elements in the parent list
+        /// Return the number of elements in the parent [LinkedMap]
         pub fn len(&self) -> usize {
-            self.map.len()
+            self.parent.map.len()
         }
 
-        /// Return , if the parent list is empty
+        /// Return, if the parent [LinkedMap] is empty
         pub fn is_empty(&self) -> bool {
-            self.map.is_empty()
+            self.parent.map.is_empty()
         }
 
-        /// Returns the number of elements the map can hold without reallocating
+        /// Returns the number of elements the parent [LinkedMap] can hold without reallocating
         pub fn capacity(&self) -> usize {
-            self.map.capacity()
+            self.parent.map.capacity()
         }
 
         /// Try to advances cursor to the next node and return the key and value of that node
         #[inline]
         #[allow(clippy::should_implement_trait)]
         pub fn next(&mut self) -> Option<$key_value> {
-            unsafe { self.node.as_ref() }.and_then(|node| {
-                unsafe { node.next().as_mut() }.map(|next| {
-                    self.node = next;
+            unsafe { self.current.as_ref() }.and_then(|current| {
+                unsafe { current.next().as_mut() }.map(|next| {
+                    self.current = next;
                     Self::map_non_null(next.into())
                 })
             })
@@ -71,9 +70,9 @@ macro_rules! impl_common {
         /// Try to move cursor to the next previous and return the key and value of that node
         #[inline]
         pub fn previous(&mut self) -> Option<$key_value> {
-            unsafe { self.node.as_ref() }.and_then(|node| {
-                unsafe { node.previous().as_mut() }.map(|prev| {
-                    self.node = prev;
+            unsafe { self.current.as_ref() }.and_then(|current| {
+                unsafe { current.previous().as_mut() }.map(|prev| {
+                    self.current = prev;
                     Self::map_non_null(prev.into())
                 })
             })
@@ -81,22 +80,22 @@ macro_rules! impl_common {
 
         /// Try to navigate to the given key.
         /// Returns [None], if no such key found.
-        pub fn to_key(&mut self, k: &K) -> Option<$key_value> {
-            self.map.get(k).map(|n| {
+        pub fn to_key(&mut self, key: &K) -> Option<$key_value> {
+            self.parent.map.get(key).map(|n| {
                 let n = *n;
-                self.node = n;
+                self.current = n;
                 Self::map_non_null(unsafe { NonNull::new_unchecked(n) })
             })
         }
 
         /// Get the key and value of the next node (if any), without advancing the cursor
         pub fn peek_next(&self) -> Option<$key_value> {
-            self.node().and_then(|n| Self::map_ptr(n.next()))
+            self.current().and_then(|n| Self::map_ptr(n.next()))
         }
 
         /// Get the key and value of the previous node (if any), without advancing the cursor
         pub fn peek_previous(&self) -> Option<$key_value> {
-            self.node().and_then(|n| Self::map_ptr(n.previous()))
+            self.current().and_then(|n| Self::map_ptr(n.previous()))
         }
 
         /// Iterate the list towards the tail
@@ -112,19 +111,28 @@ macro_rules! impl_common {
                 crate::iter::[< $iterator Backward>]::new(self)
             }
         }
+
+        /// Navigate cursor to a saved node position, saved via [CursorMut::save](CursorMut::save).
+        ///
+        /// If no node is currently saved, returns `false`.
+        pub fn resume(&mut self) -> bool {
+            if self.parent.saved.is_null() {
+                false
+            } else {
+                self.current = self.parent.saved;
+                true
+            }
+        }
     };
 }
 
 /// Enables safe linked list traversal
 pub struct Cursor<'a, K, V, S> {
-    /// Parent list
-    list: &'a LinkedList<K, V>,
+    /// Parent [LinkedMap]
+    parent: &'a LinkedMap<K, V, S>,
 
-    // Parent map
-    map: &'a HashMap<K, *mut Node<K, V>, S>,
-
-    /// Node the cursor is currently at. Can be null.
-    node: *mut Node<K, V>,
+    /// Node the cursor is currently at. Can be null, if parent is empty.
+    current: *mut Node<K, V>,
 }
 
 impl<'a, K, V, S> Cursor<'a, K, V, S>
@@ -137,21 +145,19 @@ where
 
     /// Create a cursor over the passed list, setting the cursor position to the passed node.
     ///
-    /// `list` and `map` must reference the same pool of key-value pairs.
-    /// `node` must belong to the parent list and map and be null, only if the parents are empty.
+    /// `position` must belong to the parent and be null, only if the parent is empty.
     #[inline]
-    pub(super) unsafe fn new(
-        list: &'a LinkedList<K, V>,
-        map: &'a HashMap<K, *mut Node<K, V>, S>,
-        node: *mut Node<K, V>,
-    ) -> Self {
-        Self { list, map, node }
+    pub(crate) unsafe fn new(parent: &'a LinkedMap<K, V, S>, position: *mut Node<K, V>) -> Self {
+        Self {
+            parent,
+            current: position,
+        }
     }
 
     /// Return a reference to the current node's value.
     /// Only returns None, if the list is empty.
     pub fn value(&self) -> Option<&V> {
-        self.node().map(|n| &n.val)
+        self.current().map(|n| &n.val)
     }
 
     /// Map pointer to key-value reference pair
@@ -171,23 +177,19 @@ where
 impl<'a, K, V, S> Clone for Cursor<'a, K, V, S> {
     fn clone(&self) -> Self {
         Self {
-            list: self.list,
-            map: self.map,
-            node: self.node,
+            parent: self.parent,
+            current: self.current,
         }
     }
 }
 
 /// Enables safe linked list traversal and mutation
 pub struct CursorMut<'a, K, V, S> {
-    /// Parent list
-    list: &'a mut LinkedList<K, V>,
+    /// Parent [LinkedMap]
+    parent: &'a mut LinkedMap<K, V, S>,
 
-    // Parent map
-    map: &'a mut HashMap<K, *mut Node<K, V>, S>,
-
-    /// Node the cursor is currently at. Can be null.
-    node: *mut Node<K, V>,
+    /// Node the cursor is currently at. Can be null, if parent is empty.
+    current: *mut Node<K, V>,
 }
 
 impl<'a, K, V, S> CursorMut<'a, K, V, S>
@@ -200,21 +202,22 @@ where
 
     /// Create a cursor over the passed list, setting the cursor position to the passed node.
     ///
-    /// `list` and `map` must reference the same pool of key-value pairs.
-    /// `node` must belong to the parent list and map and be null, only if the parents are empty.
+    /// `position` must belong to the parent and be null, only if the parent is empty.
     #[inline]
-    pub(super) unsafe fn new(
-        list: &'a mut LinkedList<K, V>,
-        map: &'a mut HashMap<K, *mut Node<K, V>, S>,
-        node: *mut Node<K, V>,
+    pub(crate) unsafe fn new(
+        parent: &'a mut LinkedMap<K, V, S>,
+        position: *mut Node<K, V>,
     ) -> Self {
-        Self { list, map, node }
+        Self {
+            parent,
+            current: position,
+        }
     }
 
     /// Return a reference to the current node's value.
     /// Only returns None, if the list is empty.
     pub fn value(&mut self) -> Option<&mut V> {
-        unsafe { self.node.as_mut() }.map(|n| &mut n.val)
+        unsafe { self.current.as_mut() }.map(|n| &mut n.val)
     }
 
     /// Map pointer to key-value reference pair
@@ -235,15 +238,25 @@ where
     /// If the list was empty, the cursor navigates to the inserted node.
     ///
     /// If the key matches the current node, the value of the current node is updated instead.
-    pub fn insert_before(&mut self, k: K, v: V) -> &mut V {
-        self.insert(k, v, |list, current, new| {
-            new.set_previous(current.previous());
-            new.set_next(current);
+    pub fn insert_before(&mut self, key: K, val: V) -> &mut V {
+        match unsafe { self.current.as_mut() } {
+            Some(current) => {
+                match self.parent.map.entry(key.clone()) {
+                    Entry::Occupied(e) => Self::set_value(e, val), // Reuse node
+                    Entry::Vacant(e) => {
+                        let mut new = Node::insert(key, val, current.previous(), current);
+                        e.insert(new.as_ptr());
 
-            if list.head == current {
-                list.head = new;
+                        if self.parent.list.head == current {
+                            self.parent.list.head = new.as_ptr();
+                        }
+
+                        unsafe { &mut new.as_mut().val }
+                    }
+                }
             }
-        })
+            None => self.set_only_node(key, val), // List is empty
+        }
     }
 
     /// Insert node before the current one and return a reference to its value.
@@ -251,98 +264,99 @@ where
     /// The cursor navigates to the inserted node, if the list was empty.
     ///
     /// If the key matches the current node, the value of the current node is updated instead.
-    pub fn insert_after(&mut self, k: K, v: V) -> &mut V {
-        self.insert(k, v, |list, current, new| {
-            new.set_previous(current);
-            new.set_next(current.next());
-
-            if list.tail == current {
-                list.tail = new;
-            }
-        })
-    }
-
-    /// Common logic for node insertion.
-    ///
-    /// `after_insert` accepts the parent list, the current node and the inserted node as arguments.
-    #[inline(always)]
-    fn insert(
-        &mut self,
-        k: K,
-        v: V,
-        after_insert: impl Fn(&mut LinkedList<K, V>, &mut Node<K, V>, &mut Node<K, V>),
-    ) -> &mut V {
-        match unsafe { self.node.as_mut() } {
+    pub fn insert_after(&mut self, key: K, val: V) -> &mut V {
+        match unsafe { self.current.as_mut() } {
             Some(current) => {
-                match self.map.entry(k.clone()) {
-                    Entry::Occupied(e) => Self::set_value(e, v), // Reuse node
+                match self.parent.map.entry(key.clone()) {
+                    Entry::Occupied(e) => Self::set_value(e, val), // Reuse node
                     Entry::Vacant(e) => {
-                        let node = Node::new(k, v);
-                        e.insert(node);
+                        let mut new = Node::insert(key, val, current, current.next());
+                        e.insert(new.as_ptr());
 
-                        after_insert(self.list, current, unsafe { &mut *node });
+                        if self.parent.list.tail == current {
+                            self.parent.list.tail = new.as_ptr();
+                        }
 
-                        unsafe { &mut (*node).val }
+                        unsafe { &mut new.as_mut().val }
                     }
                 }
             }
-            None => self.set_only_node(k, v), // List is empty
+            None => self.set_only_node(key, val), // List is empty
         }
     }
 
     /// Set the only node in the list. Only call this, when list is empty.
     #[cold]
-    fn set_only_node(&mut self, k: K, v: V) -> &mut V {
-        let node = Node::new(k.clone(), v);
+    fn set_only_node(&mut self, key: K, val: V) -> &mut V {
+        let mut new = Node::insert(key.clone(), val, null_mut(), null_mut());
+        let ptr = new.as_ptr();
 
-        self.list.head = node;
-        self.list.tail = node;
-        self.node = node;
+        self.parent.list.head = ptr;
+        self.parent.list.tail = ptr;
+        self.current = ptr;
 
-        self.map.insert_unique_unchecked(k, node);
+        self.parent.map.insert_unique_unchecked(key, ptr);
 
-        unsafe { &mut (*node).val }
+        unsafe { &mut new.as_mut().val }
     }
 
     /// Set the value of an occupied entry
     #[cold]
-    fn set_value(mut e: OccupiedEntry<'_, K, *mut Node<K, V>, S>, v: V) -> &mut V {
+    fn set_value(mut entry: OccupiedEntry<'_, K, *mut Node<K, V>, S>, val: V) -> &mut V {
         unsafe {
-            let ptr = *e.get_mut();
-            (*ptr).val = v;
+            let ptr = *entry.get_mut();
+            (*ptr).val = val;
             &mut (*ptr).val
         }
     }
 
-    /// Remove current node and return its key and value.
+    /// Remove the current node and return its key and value.
     /// Returns [None], if list is empty.
     ///
     /// Navigates the cursor to the previous node.
     /// If removed node was the head of the list, navigates it to the next node.
     /// If the list becomes empty, the cursor points to no node after the call.
     pub fn remove(&mut self) -> Option<(K, V)> {
-        if self.node.is_null() {
-            None
-        } else {
-            let current = unsafe { &mut *self.node };
-
-            if self.list.head == current {
-                self.list.head = current.next();
+        unsafe { self.current.as_mut() }.map(|current| {
+            if self.parent.list.head == current {
+                self.parent.list.head = current.next();
             }
-            if self.list.tail == current {
-                self.list.tail = current.previous();
+            if self.parent.list.tail == current {
+                self.parent.list.tail = current.previous();
+            }
+            if self.parent.saved == current {
+                self.parent.saved = null_mut();
             }
 
-            self.node = if !current.previous().is_null() {
+            self.current = if !current.previous().is_null() {
                 current.previous()
             } else {
                 current.next()
             };
 
-            current.unlink();
+            current.remove();
 
-            let current = unsafe { Box::from_raw(self.node) };
-            Some((current.key, current.val))
-        }
+            let current = unsafe { Box::from_raw(current) };
+            (current.key, current.val)
+        })
     }
+
+    /// Remember the current cursor position for efficiently navigating to the this node later on using the
+    /// `resume()` methods on [Cursor], [CursorMut] and [LinkedMap] or the `get_saved()` and `resume_mut()` methods on
+    /// [LinkedMap].
+    ///
+    /// Note that the only operation that silently invalidates a saved position is removing the saved node. Inserting
+    /// new modes anywhere in the list or changing the saved node's siblings does not.
+    ///
+    /// Only up to 1 node can be saved per [LinkedMap] at any given time.
+    pub fn save(&mut self) {
+        self.parent.saved = self.current;
+    }
+
+    /// Clear any saved node. See [CursorMut::save()](CursorMut::save) for details.
+    pub fn clear_saved(&mut self) {
+        self.parent.saved = null_mut();
+    }
+
+    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_direction))
 }

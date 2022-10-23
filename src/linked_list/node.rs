@@ -1,4 +1,4 @@
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut, NonNull};
 
 /// Linked list node containing value of type T
 pub struct Node<K, V> {
@@ -16,15 +16,26 @@ pub struct Node<K, V> {
 }
 
 impl<K, V> Node<K, V> {
-    /// Create new node pointer without the previous and next nodes set
+    /// Create new node pointer and insert it into an existing list.
+    /// The previous and next nodes can be null.
     #[inline]
-    pub fn new(k: K, v: V) -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            key: k,
-            val: v,
-            next: null_mut(),
-            previous: null_mut(),
-        }))
+    pub fn insert(key: K, val: V, previous: *mut Self, next: *mut Self) -> NonNull<Self> {
+        let ptr = Box::into_raw(Box::new(Self {
+            key,
+            val,
+            next,
+            previous,
+        }));
+        unsafe {
+            if let Some(next) = next.as_mut() {
+                next.previous = ptr;
+            }
+            if let Some(previous) = previous.as_mut() {
+                previous.next = ptr;
+            }
+
+            NonNull::new_unchecked(ptr)
+        }
     }
 
     /// Return pointer to the previous node. Can be null.
@@ -32,40 +43,14 @@ impl<K, V> Node<K, V> {
         self.previous
     }
 
-    /// Set the previous node pointer and set the next node pointer of the previous node, if any.
-    ///
-    /// This does set the next pointer on any existing previous node.
-    #[inline]
-    pub fn set_previous(&mut self, previous: *mut Self) {
-        self.previous = previous;
-        unsafe {
-            if let Some(previous) = self.previous.as_mut() {
-                previous.next = self;
-            }
-        }
-    }
-
     /// Return pointer to the next node. Can be null.
     pub fn next(&self) -> *mut Self {
         self.next
     }
 
-    /// Set the next node pointer and set the previous node pointer of the next node, if any.
-    ///
-    /// This does set the previous pointer on any existing next node.
+    /// Remove node from the list, patching the previous and next values on this and the neighboring nodes
     #[inline]
-    pub fn set_next(&mut self, next: *mut Self) {
-        self.next = next;
-        unsafe {
-            if let Some(next) = self.next.as_mut() {
-                next.previous = self;
-            }
-        }
-    }
-
-    /// Remove node from the list, patching the previous and next values on the neighboring nodes
-    #[inline]
-    pub fn unlink(&mut self) {
+    pub fn remove(&mut self) {
         unsafe {
             if let Some(next) = self.next.as_mut() {
                 next.previous = self.previous;
@@ -74,5 +59,7 @@ impl<K, V> Node<K, V> {
                 previous.next = self.next;
             }
         }
+        self.next = null_mut();
+        self.previous = null_mut();
     }
 }
