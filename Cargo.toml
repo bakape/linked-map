@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+name = "linked-map"
+version = "0.1.0"
+
+[dependencies]
+derive-getters = "0.2.0"
+derive_more = "0.99.17"
+hashbrown = {version = "0.12.3"}
+paste = "1.0.9"
+rayon = {version = "1.5.3", optional = true}
+serde = {version = "1.0.145", optional = true}
+
+[features]
+rayon = ["dep:rayon", "hashbrown/rayon"]
+serde = ["dep:serde", "hashbrown/serde"]
