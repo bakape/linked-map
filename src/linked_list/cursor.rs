@@ -358,5 +358,5 @@ where
         self.parent.saved = null_mut();
     }
 
-    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_direction))
+    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_start_direction))
 }
