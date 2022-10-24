@@ -31,7 +31,14 @@ where
     /// Construct and navigate cursor to a saved node position, saved via [CursorMut::save](CursorMut::save).
     ///
     /// If no node is currently saved, returns [None].
-    pub fn resume(&mut self) -> Option<CursorMut<'_, K, V, S>> {
+    pub fn resume(&self) -> Option<Cursor<'_, K, V, S>> {
+        unsafe { self.saved.as_mut().map(|saved| Cursor::new(self, saved)) }
+    }
+
+    /// Construct and navigate a mutable cursor to a saved node position, saved via [CursorMut::save](CursorMut::save).
+    ///
+    /// If no node is currently saved, returns [None].
+    pub fn resume_mut(&mut self) -> Option<CursorMut<'_, K, V, S>> {
         unsafe { self.saved.as_mut().map(|saved| CursorMut::new(self, saved)) }
     }
 
@@ -59,9 +66,41 @@ where
     pub fn iter_rev_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
         unsafe { CursorMut::new(self, self.list.tail) }.iter_rev()
     }
+
+    /// Create a cursor over the linked map.
+    ///
+    /// The Cursor is set to the start of the list.
+    pub fn cursor(&self) -> Cursor<'_, K, V, S> {
+        unsafe { Cursor::new(self, self.list.head) }
+    }
+
+    /// Create a mutable cursor over the linked map.
+    ///
+    /// The Cursor is set to the start of the list.
+    pub fn cursor_mut(&mut self) -> CursorMut<'_, K, V, S> {
+        unsafe { CursorMut::new(self, self.list.head) }
+    }
+
+    /// Create a cursor navigated to the passed key.
+    ///
+    /// This is a shorthand for constricting a cursor and calling `to_key()`.
+    ///
+    /// Returns [None], if the key is not in the map,
+    pub fn cursor_at(&self, k: &K) -> Option<Cursor<K, V, S>> {
+        self.map.get(k).map(|n| unsafe { Cursor::new(self, *n) })
+    }
+
+    /// Create a mutable cursor navigated to the passed key.
+    ///
+    /// This is a shorthand for constricting a cursor and calling `to_key()`.
+    ///
+    /// Returns [None], if the key is not in the map,
+    pub fn cursor_at_mut(&mut self, k: &K) -> Option<CursorMut<K, V, S>> {
+        self.map
+            .get(k)
+            .copied()
+            .map(|n| unsafe { CursorMut::new(self, n) })
+    }
 }
 
-// TODO: cursor constructors from head, tail and at key (get_cursor)
-// TODO: get_saved() -> (&K, &V)
-// TODO: get_saved_mut() -> (&K, &mut V)
 // TODO: port as many methods and trait impls of the stdlib linked_list and hashbrown::HashMap as possible

@@ -6,7 +6,7 @@ use super::node::Node;
 use paste::paste;
 use std::{
     hash::{BuildHasher, Hash},
-    ptr::{null, null_mut, NonNull},
+    ptr::{null_mut, NonNull},
 };
 
 /// Implement functionality common to both mutable and immutable cursors
@@ -358,5 +358,5 @@ where
         self.parent.saved = null_mut();
     }
 
-    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_start_direction))
+    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_direction))
 }

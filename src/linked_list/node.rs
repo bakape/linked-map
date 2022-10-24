@@ -1,4 +1,4 @@
-use std::ptr::{null, null_mut, NonNull};
+use std::ptr::{null_mut, NonNull};
 
 /// Linked list node containing value of type T
 pub struct Node<K, V> {
