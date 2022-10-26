@@ -104,3 +104,4 @@ where
 }
 
 // TODO: port as many methods and trait impls of the stdlib linked_list and hashbrown::HashMap as possible
+// TODO: sort_by and sort_stable_by

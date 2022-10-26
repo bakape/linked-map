@@ -38,6 +38,26 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// Insert a node before this one
+    pub fn insert_before(&mut self, mut node: NonNull<Self>) {
+        unsafe {
+            node.as_mut().next = self;
+            node.as_mut().previous = self.previous;
+        }
+
+        self.previous = node.as_ptr();
+    }
+
+    /// Insert a node after this one
+    pub fn insert_after(&mut self, mut node: NonNull<Self>) {
+        unsafe {
+            node.as_mut().next = self.next;
+            node.as_mut().previous = self;
+        }
+
+        self.next = node.as_ptr();
+    }
+
     /// Return pointer to the previous node. Can be null.
     pub fn previous(&self) -> *mut Self {
         self.previous
@@ -48,7 +68,9 @@ impl<K, V> Node<K, V> {
         self.next
     }
 
-    /// Remove node from the list, patching the previous and next values on this and the neighboring nodes
+    /// Remove node from the list, patching the previous and next values on the neighboring nodes.
+    ///
+    /// The pointers on the removed node are left as is, as they would be set as needed later on.
     #[inline]
     pub fn remove(&mut self) {
         unsafe {
@@ -59,7 +81,5 @@ impl<K, V> Node<K, V> {
                 previous.next = self.next;
             }
         }
-        self.next = null_mut();
-        self.previous = null_mut();
     }
 }

@@ -2,7 +2,7 @@ use hashbrown::hash_map::{Entry, OccupiedEntry};
 
 use crate::LinkedMap;
 
-use super::node::Node;
+use super::{node::Node, LinkedList};
 use paste::paste;
 use std::{
     hash::{BuildHasher, Hash},
@@ -318,12 +318,7 @@ where
     /// If the list becomes empty, the cursor points to no node after the call.
     pub fn remove(&mut self) -> Option<(K, V)> {
         unsafe { self.current.as_mut() }.map(|current| {
-            if self.parent.list.head == current {
-                self.parent.list.head = current.next();
-            }
-            if self.parent.list.tail == current {
-                self.parent.list.tail = current.previous();
-            }
+            self.shift_ends(current);
             if self.parent.saved == current {
                 self.parent.saved = null_mut();
             }
@@ -339,6 +334,17 @@ where
             let current = unsafe { Box::from_raw(current) };
             (current.key, current.val)
         })
+    }
+
+    /// Shift or remove the head and/or tail of the list, if the node node matches either.
+    /// Should be called before a node is removed from the list.
+    fn shift_ends(&mut self, node: &mut Node<K, V>) {
+        if self.parent.list.head == node {
+            self.parent.list.head = node.next();
+        }
+        if self.parent.list.tail == node {
+            self.parent.list.tail = node.previous();
+        }
     }
 
     /// Remember the current cursor position for efficiently navigating to the this node later on using the
@@ -358,5 +364,86 @@ where
         self.parent.saved = null_mut();
     }
 
-    // TODO: moving functions for current node: move_to_back, move_to_front, move_by(n, direction) -> int, move_to(n, count_direction))
+    /// Move the current node to the start of the list.
+    ///
+    /// As [NavigateTo] have fallbacks for edge cases, the node the cursor actually navigated to is returned.
+    /// None is returned only in case of an empty parent [LinkedMap].
+    pub fn move_to_start(&mut self, navigate_to: NavigateTo) -> Option<NavigateTo> {
+        self.move_to_edge(navigate_to, |list, node| {
+            unsafe { list.head.as_mut() }
+                .expect("list head to be set")
+                .insert_before(node);
+            list.head = node.as_ptr();
+        })
+    }
+
+    /// Move the current node to the end of the list.
+    ///
+    /// As [NavigateTo] have fallbacks for edge cases, the node the cursor actually navigated to is returned.
+    /// None is returned only in case of an empty parent [LinkedMap].
+    pub fn move_to_end(&mut self, navigate_to: NavigateTo) -> Option<NavigateTo> {
+        self.move_to_edge(navigate_to, |list, node| {
+            unsafe { list.tail.as_mut() }
+                .expect("list tail to be set")
+                .insert_after(node);
+            list.tail = node.as_ptr();
+        })
+    }
+
+    /// Move the current node to one of the list edges.
+    ///
+    /// As [NavigateTo] has fallbacks for edge cases, the node the cursor actually navigated to is returned.
+    /// None is returned only in case of an empty parent [LinkedMap].
+    #[inline(always)]
+    fn move_to_edge(
+        &mut self,
+        mut navigate_to: NavigateTo,
+        move_node: impl FnOnce(&mut LinkedList<K, V>, NonNull<Node<K, V>>),
+    ) -> Option<NavigateTo> {
+        if self.len() <= 1 {
+            return None;
+        }
+        let mut node = NonNull::new(self.current)?;
+        let node_ref = unsafe { node.as_mut() };
+
+        self.shift_ends(node_ref);
+
+        // Adjust `navigate_to`, according to the position of the current node in the list
+        match navigate_to {
+            NavigateTo::Next => {
+                if node_ref.next().is_null() {
+                    navigate_to = NavigateTo::Previous;
+                }
+            }
+            NavigateTo::Previous => {
+                if node_ref.previous().is_null() {
+                    navigate_to = NavigateTo::Next;
+                }
+            }
+            _ => (),
+        };
+
+        node_ref.remove();
+        move_node(&mut self.parent.list, node);
+        navigate_to.into()
+    }
+}
+
+/// Navigation policy for node moving operations
+#[derive(Clone, Copy)]
+pub enum NavigateTo {
+    /// Navigate to the Node that was moved.
+    ///
+    /// This is the only actually used mode, if [LinkedMap] has only one entry.
+    MovedNode,
+
+    /// Navigate to the previous node.
+    ///
+    /// If there are no previous nodes, navigate to the next one.
+    Previous,
+
+    /// Navigate to the next node
+    ///
+    /// If there are no next nodes, navigate to the previous one.
+    Next,
 }
