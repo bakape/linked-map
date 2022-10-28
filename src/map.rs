@@ -24,6 +24,20 @@ pub struct LinkedMap<K, V, S> {
 
 impl<K, V, S> LinkedMap<K, V, S>
 where
+    K: Eq + Hash + Clone,
+    S: BuildHasher,
+{
+    /// Create a new empty [LinkedMap]
+    pub fn new() -> Self
+    where
+        S: Default,
+    {
+        Default::default()
+    }
+}
+
+impl<K, V, S> LinkedMap<K, V, S>
+where
     K: Eq + Hash + Clone + 'static,
     V: 'static,
     S: BuildHasher,
@@ -103,5 +117,53 @@ where
     }
 }
 
+impl<K, V, S> Default for LinkedMap<K, V, S>
+where
+    S: BuildHasher + Default,
+{
+    fn default() -> Self {
+        Self {
+            list: LinkedList::new(),
+            map: Default::default(),
+            saved: null_mut(),
+        }
+    }
+}
+
 // TODO: port as many methods and trait impls of the stdlib linked_list and hashbrown::HashMap as possible
-// TODO: sort_by and sort_stable_by
+// TODO: sort_by and sort_by_stable
+// TODO: append and prepend instead of insert
+
+impl<K, V, S> Clone for LinkedMap<K, V, S>
+where
+    K: Eq + Hash + Clone + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Default,
+{
+    fn clone(&self) -> Self {
+        self.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+}
+
+impl<K, V, S> FromIterator<(K, V)> for LinkedMap<K, V, S>
+where
+    K: Eq + Hash + Clone,
+    S: BuildHasher + Default,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+
+        let mut lm = LinkedMap {
+            list: LinkedList::new(),
+            map: HashMap::with_capacity_and_hasher(iter.size_hint().0, S::default()),
+            saved: null_mut(),
+        };
+
+        for (k, v) in iter {
+            let n = lm.list.append(k.clone(), v);
+            lm.map.insert(k, n.as_ptr());
+        }
+
+        lm
+    }
+}
